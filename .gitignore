@@ -12,3 +12,5 @@
 !tests/**
 !solution/
 !solution/**
+__pycache__/
+*.pyc
