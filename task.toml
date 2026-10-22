@@ -1,0 +1,27 @@
+schema_version = "1.3"
+
+[task]
+name = "local/pv-iv-curve-recheck"
+description = "光伏组件单二极管模型 IV 曲线复核工具的计算修正与台账治理"
+authors = [{ name = "shuai" }]
+keywords = ["python", "光伏单二极管模型", "数值求解", "CSV 台账"]
+
+[agent]
+timeout_sec = 3600
+
+[environment]
+build_timeout_sec = 900
+cpus = 1
+memory_mb = 2048
+storage_mb = 4096
+gpus = 0
+allow_internet = true
+
+[verifier]
+timeout_sec = 300
+
+[metadata]
+difficulty = "hard"
+category = "能源系统"
+tags = ["python", "photovoltaic", "single-diode-model", "bisection"]
+expert_time_estimate = "3h"
