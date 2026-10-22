@@ -63,6 +63,8 @@ def main():
     ap.add_argument("--report", required=True)
     ap.add_argument("--curve-dir", required=True)
     ap.add_argument("--ledger", required=True)
+    ap.add_argument("--measurements")
+    ap.add_argument("--fit-out")
     args = ap.parse_args()
 
     batches = read_batches(args.input)
@@ -81,6 +83,25 @@ def main():
 
     for b in batches:
         write_curve(args.curve_dir, b)
+
+    if args.measurements and args.fit_out:
+        import iv_fit
+        with open(args.fit_out, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["batch_id", "i0_a", "n_factor", "rs_ohm", "rsh_ohm", "rmse_a"])
+            for b in batches:
+                mpath = os.path.join(args.measurements, "%s.csv" % b["batch_id"])
+                if not os.path.exists(mpath):
+                    continue
+                pts = []
+                with open(mpath, newline="", encoding="utf-8") as mf:
+                    for row in csv.DictReader(mf):
+                        pts.append((float(row["v"]), float(row["i"])))
+                t_cell = iv_model.cell_temperature(b["t_amb"], b["noct"], b["g"])
+                iph = iv_model.photocurrent(b["isc_stc"], b["alpha"], t_cell, b["g"])
+                i0, n, rs, rsh, rmse = iv_fit.identify(pts, iph, t_cell, b["ns"])
+                w.writerow([b["batch_id"], "%.3e" % i0, "%.4f" % n,
+                            "%.4f" % rs, "%.4f" % rsh, "%.4f" % rmse])
 
     with open(args.ledger, "a", encoding="utf-8") as f:
         for b in batches:

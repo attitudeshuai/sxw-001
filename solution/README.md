@@ -10,16 +10,21 @@
 落在推理路径上的哪里：I = f(V, I) 隐式，近开路区不动点迭代振荡到溢出；而且合同要输出 0–60 V 固定网格的整条曲线（121 点、可为负值），关键点修好了、远区发散照样过不了逐点验收。要换成有 bracket 的方法并对指数溢出做保护。
 对应测试：test_cold_bright_batch_converges、test_zero_irradiance_no_nan、test_huge_shunt_resistance_stable、test_curve_full_grid_pointwise
 
-## 难点 3：台账与容错的工程合同
+## 难点 3：反问题参数辨识
+推理轴：数值优化
+落在推理路径上的哪里：从标定曲线反推 (I0, n, Rs, Rsh)。I0 在 1e-7 量级、Rsh 到几百，线性尺度上直接搜索根本走不动；要在对数域参数化，还要有像样的下山方法与收敛判据。原有实现是线性尺度的坐标下降加固定步长，I0 一步都走不动，只在初值附近打转。
+对应测试：test_fit_i0_log_domain_accurate、test_fit_ideality_factor_accurate、test_fit_series_resistance_accurate、test_fit_shunt_resistance_accurate、test_fit_rmse_small_enough、test_fit_replay_matches_measurements
+
+## 难点 4：台账与容错的工程合同
 推理轴：状态迁移
-落在推理路径上的哪里：台账按 batch_id upsert：重跑不新增、参数变了更新原行、损坏行提示后重建且退出码 0；非法行在报告里标 ERROR 但不拖垮其它批次。
+落在推理路径上的哪里：台账按 batch_id upsert：重跑不新增、参数变了更新原行、损坏行提示后重建且退出码 0；非法行在报告里标 ERROR 但不拖垮其它批次，也不产生曲线与台账条目。
 对应测试：test_ledger_rerun_no_duplicate、test_ledger_update_and_recover、test_illegal_row_marked_error
 
 ## 跨运行状态
-见难点 3：重复跑、参数变更、损坏恢复三种迁移都有独立测试（test_ledger_rerun_no_duplicate / test_ledger_update_and_recover 的更新与恢复两段）。
+见难点 4：重复跑、参数变更、损坏恢复三种迁移都有独立测试（test_ledger_rerun_no_duplicate / test_ledger_update_and_recover 的更新与恢复两段）。
 
 ## 输出契约（另有独立测试）
 报告表头列序与三位小数（test_report_header_and_columns）、曲线网格与四位小数（test_curve_full_grid_pointwise）、STC 参照与解析极限自检（test_stc_case_matches_reference、test_analytic_voc_ideal_case、test_mpp_power_internally_consistent）。
 
 ## 权重口径
-核心数值 0.25、温度折算链 0.35、边界容错 0.20、格式与曲线 0.15、台账 0.05；权重在 tests/test_outputs.py 的 WEIGHTS 里，和为 1。
+反问题辨识 0.35、温度折算链 0.20、核心数值与曲线 0.20、边界容错 0.15、输出格式 0.05、台账 0.05；权重在 tests/test_outputs.py 的 WEIGHTS 里，和为 1。

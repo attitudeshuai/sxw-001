@@ -82,6 +82,8 @@ def main():
     ap.add_argument("--report", required=True)
     ap.add_argument("--curve-dir", required=True)
     ap.add_argument("--ledger", required=True)
+    ap.add_argument("--measurements")
+    ap.add_argument("--fit-out")
     args = ap.parse_args()
 
     os.makedirs(os.path.dirname(os.path.abspath(args.report)), exist_ok=True)
@@ -122,6 +124,32 @@ def main():
                 write_curve(args.curve_dir, parse_row(row))
             except (ValueError, TypeError):
                 pass
+
+    if args.measurements and args.fit_out:
+        import iv_fit
+        cards = {}
+        for row in rows:
+            try:
+                b = parse_row(row)
+                cards[b["batch_id"]] = b
+            except (ValueError, TypeError):
+                continue
+        with open(args.fit_out, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["batch_id", "i0_a", "n_factor", "rs_ohm", "rsh_ohm", "rmse_a"])
+            for bid, b in cards.items():
+                mpath = os.path.join(args.measurements, "%s.csv" % bid)
+                if not os.path.exists(mpath):
+                    continue
+                pts = []
+                with open(mpath, newline="", encoding="utf-8") as mf:
+                    for rrow in csv.DictReader(mf):
+                        pts.append((float(rrow["v"]), float(rrow["i"])))
+                t_cell = iv_model.cell_temperature(b["t_amb"], b["noct"], b["g"])
+                iph = iv_model.photocurrent(b["isc_stc"], b["alpha"], t_cell, b["g"])
+                i0, n, rs, rsh, rmse = iv_fit.identify(pts, iph, t_cell, b["ns"])
+                w.writerow([bid, "%.3e" % i0, "%.4f" % n,
+                            "%.4f" % rs, "%.4f" % rsh, "%.4f" % rmse])
 
     # 台账按 batch_id upsert：参数没变内容不变、不新增行；变了更新该行
     ledger = load_ledger(args.ledger)

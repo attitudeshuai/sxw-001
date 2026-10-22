@@ -22,22 +22,28 @@ Q_E = 1.602176634e-19
 T_STC = 298.15
 
 WEIGHTS = {
-    "test_stc_case_matches_reference": 0.10,
-    "test_analytic_voc_ideal_case": 0.10,
+    "test_stc_case_matches_reference": 0.05,
+    "test_analytic_voc_ideal_case": 0.05,
     "test_mpp_power_internally_consistent": 0.05,
-    "test_voc_drops_when_cell_hot": 0.075,
-    "test_isc_scales_with_irradiance": 0.075,
-    "test_alpha_shifts_isc_off_stc": 0.05,
-    "test_i0_temperature_shift_correct": 0.10,
-    "test_noct_cell_temperature_used": 0.05,
-    "test_cold_bright_batch_converges": 0.05,
-    "test_huge_shunt_resistance_stable": 0.05,
-    "test_illegal_row_marked_error": 0.05,
-    "test_zero_irradiance_no_nan": 0.05,
+    "test_curve_full_grid_pointwise": 0.05,
+    "test_voc_drops_when_cell_hot": 0.05,
+    "test_isc_scales_with_irradiance": 0.05,
+    "test_alpha_shifts_isc_off_stc": 0.025,
+    "test_i0_temperature_shift_correct": 0.05,
+    "test_noct_cell_temperature_used": 0.025,
+    "test_cold_bright_batch_converges": 0.04,
+    "test_huge_shunt_resistance_stable": 0.04,
+    "test_illegal_row_marked_error": 0.04,
+    "test_zero_irradiance_no_nan": 0.03,
     "test_report_header_and_columns": 0.05,
-    "test_curve_full_grid_pointwise": 0.10,
     "test_ledger_rerun_no_duplicate": 0.02,
     "test_ledger_update_and_recover": 0.03,
+    "test_fit_i0_log_domain_accurate": 0.09,
+    "test_fit_ideality_factor_accurate": 0.08,
+    "test_fit_series_resistance_accurate": 0.05,
+    "test_fit_shunt_resistance_accurate": 0.04,
+    "test_fit_rmse_small_enough": 0.05,
+    "test_fit_replay_matches_measurements": 0.04,
 }
 
 HEADER = ["batch_id", "isc_a", "voc_v", "vmpp_v", "impp_a", "pmpp_w"]
@@ -123,11 +129,13 @@ def expected_points(b):
 
 
 # ---------------------------------------------------------------- 驱动被测程序
-def run_tool(tmp, batches):
+def run_tool(tmp, batches, meas_ids=()):
     inp = os.path.join(tmp, "in.csv")
     rep = os.path.join(tmp, "report.csv")
     led = os.path.join(tmp, "ledger.jsonl")
     cdir = os.path.join(tmp, "curve")
+    mdir = os.path.join(tmp, "meas")
+    os.makedirs(mdir, exist_ok=True)
     with open(inp, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["batch_id"] + BATCH_KEYS)
@@ -136,9 +144,22 @@ def run_tool(tmp, batches):
                 w.writerow([bid, b])   # 非法行
             else:
                 w.writerow([bid] + [b[k] for k in BATCH_KEYS])
+    # 标定曲线由基准实现现生成（无噪声、固定网格），与被测程序不共享代码
+    for bid, b in batches:
+        if isinstance(b, str) or bid not in meas_ids:
+            continue
+        iph, i0, nvt = bench_params(b)
+        with open(os.path.join(mdir, "%s.csv" % bid), "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["v", "i"])
+            for k in range(121):
+                v = k * 0.5
+                w.writerow(["%.1f" % v, "%.6f" % i_at_v(v, iph, i0, b["rs_ohm"], b["rsh_ohm"], nvt)])
+    fit = os.path.join(tmp, "fit.csv")
     r = subprocess.run([sys.executable, os.path.join(SRC, "iv_recheck.py"),
-                        "--input", inp, "--report", rep, "--curve-dir", cdir, "--ledger", led],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+                        "--input", inp, "--report", rep, "--curve-dir", cdir, "--ledger", led,
+                        "--measurements", mdir, "--fit-out", fit],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=240)
     rows = []
     if os.path.exists(rep):
         with open(rep, newline="", encoding="utf-8") as f:
@@ -147,7 +168,12 @@ def run_tool(tmp, batches):
     if os.path.exists(led):
         with open(led, encoding="utf-8") as f:
             ledger = f.read().splitlines()
-    return r, rows, ledger, cdir
+    fitrows = {}
+    if os.path.exists(fit):
+        with open(fit, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                fitrows[row["batch_id"]] = row
+    return r, rows, ledger, cdir, fitrows
 
 
 def values(rows, bid):
@@ -165,7 +191,7 @@ def test_stc_case_matches_reference():
     b = dict(BASE)
     exp = expected_points(b)
     with tempfile.TemporaryDirectory() as tmp:
-        r, rows, _l, _c = run_tool(tmp, [("T-STC", b)])
+        r, rows, _l, _c, _f = run_tool(tmp, [("T-STC", b)])
         got = values(rows, "T-STC")
     assert r.returncode == 0 and got is not None
     assert got["isc"] == pytest.approx(exp["isc"], abs=TOL_AV)
@@ -179,7 +205,7 @@ def test_analytic_voc_ideal_case():
     iph, i0, nvt = bench_params(b)
     voc_ana = nvt * math.log(iph / i0 + 1.0)
     with tempfile.TemporaryDirectory() as tmp:
-        r, rows, _l, _c = run_tool(tmp, [("T-ANA", b)])
+        r, rows, _l, _c, _f = run_tool(tmp, [("T-ANA", b)])
         got = values(rows, "T-ANA")
     assert r.returncode == 0 and got is not None
     assert got["voc"] == pytest.approx(voc_ana, abs=TOL_AV)
@@ -190,7 +216,7 @@ def test_mpp_power_internally_consistent():
     b = dict(BASE, t_amb_c=30.0, g_wm2=900.0)
     exp = expected_points(b)
     with tempfile.TemporaryDirectory() as tmp:
-        r, rows, _l, _c = run_tool(tmp, [("T-MPP", b)])
+        r, rows, _l, _c, _f = run_tool(tmp, [("T-MPP", b)])
         got = values(rows, "T-MPP")
     assert r.returncode == 0 and got is not None
     assert got["vmpp"] == pytest.approx(exp["vmpp"], abs=TOL_AV)
@@ -204,7 +230,7 @@ def test_voc_drops_when_cell_hot():
     exp_base = expected_points(dict(BASE))
     exp_hot = expected_points(hot)
     with tempfile.TemporaryDirectory() as tmp:
-        r, rows, _l, _c = run_tool(tmp, [("T-20", dict(BASE)), ("T-45", hot)])
+        r, rows, _l, _c, _f = run_tool(tmp, [("T-20", dict(BASE)), ("T-45", hot)])
         g20, g45 = values(rows, "T-20"), values(rows, "T-45")
     assert r.returncode == 0 and g20 is not None and g45 is not None
     assert g45["voc"] == pytest.approx(exp_hot["voc"], abs=TOL_AV)
@@ -216,7 +242,7 @@ def test_isc_scales_with_irradiance():
     dim = dict(BASE, g_wm2=300.0)
     exp = expected_points(dim)
     with tempfile.TemporaryDirectory() as tmp:
-        r, rows, _l, _c = run_tool(tmp, [("T-G3", dim)])
+        r, rows, _l, _c, _f = run_tool(tmp, [("T-G3", dim)])
         got = values(rows, "T-G3")
     assert r.returncode == 0 and got is not None
     assert got["isc"] == pytest.approx(exp["isc"], abs=TOL_AV)
@@ -227,7 +253,7 @@ def test_alpha_shifts_isc_off_stc():
     warm = dict(BASE, t_amb_c=35.0)
     exp = expected_points(warm)
     with tempfile.TemporaryDirectory() as tmp:
-        r, rows, _l, _c = run_tool(tmp, [("T-A35", warm)])
+        r, rows, _l, _c, _f = run_tool(tmp, [("T-A35", warm)])
         got = values(rows, "T-A35")
     assert r.returncode == 0 and got is not None
     assert got["isc"] == pytest.approx(exp["isc"], abs=TOL_AV)
@@ -238,7 +264,7 @@ def test_i0_temperature_shift_correct():
     cold = dict(BASE, t_amb_c=0.0)
     exp = expected_points(cold)
     with tempfile.TemporaryDirectory() as tmp:
-        r, rows, _l, _c = run_tool(tmp, [("T-I0", cold)])
+        r, rows, _l, _c, _f = run_tool(tmp, [("T-I0", cold)])
         got = values(rows, "T-I0")
     assert r.returncode == 0 and got is not None
     assert got["voc"] == pytest.approx(exp["voc"], abs=TOL_AV)
@@ -249,7 +275,7 @@ def test_noct_cell_temperature_used():
     b = dict(BASE, t_amb_c=25.0, noct_c=48.0, g_wm2=800.0)
     exp = expected_points(b)
     with tempfile.TemporaryDirectory() as tmp:
-        r, rows, _l, _c = run_tool(tmp, [("T-NOCT", b)])
+        r, rows, _l, _c, _f = run_tool(tmp, [("T-NOCT", b)])
         got = values(rows, "T-NOCT")
     assert r.returncode == 0 and got is not None
     assert got["isc"] == pytest.approx(exp["isc"], abs=TOL_AV)
@@ -261,7 +287,7 @@ def test_cold_bright_batch_converges():
     b = dict(BASE, isc_stc_a=9.60, i0_stc_a=8.0e-8, ns_cells=66, t_amb_c=-10.0, g_wm2=1100.0)
     exp = expected_points(b)
     with tempfile.TemporaryDirectory() as tmp:
-        r, rows, _l, _c = run_tool(tmp, [("T-CB", b)])
+        r, rows, _l, _c, _f = run_tool(tmp, [("T-CB", b)])
         got = values(rows, "T-CB")
     assert r.returncode == 0 and got is not None
     assert got["voc"] == pytest.approx(exp["voc"], abs=TOL_AV)
@@ -273,7 +299,7 @@ def test_huge_shunt_resistance_stable():
     b = dict(BASE, rsh_ohm=1.0e9)
     exp = expected_points(b)
     with tempfile.TemporaryDirectory() as tmp:
-        r, rows, _l, _c = run_tool(tmp, [("T-RSH", b)])
+        r, rows, _l, _c, _f = run_tool(tmp, [("T-RSH", b)])
         got = values(rows, "T-RSH")
     assert r.returncode == 0 and got is not None
     assert got["isc"] == pytest.approx(exp["isc"], abs=TOL_AV)
@@ -283,7 +309,7 @@ def test_illegal_row_marked_error():
     """题面原文：“非法行（列数不对、数值无法解析）在报告里标 batch_id,ERROR，其余批次照常出数”。"""
     good = dict(BASE)
     with tempfile.TemporaryDirectory() as tmp:
-        r, rows, led, cdir = run_tool(tmp, [("T-OK", good), ("T-BAD", "not-a-number")])
+        r, rows, led, cdir, _f = run_tool(tmp, [("T-OK", good), ("T-BAD", "not-a-number")])
         curve_files = os.listdir(cdir) if os.path.isdir(cdir) else []
     ok_row = values(rows, "T-OK")
     bad = [row for row in rows[1:] if row and row[0] == "T-BAD"]
@@ -300,7 +326,7 @@ def test_zero_irradiance_no_nan():
     """题面原文：“不许死循环、溢出或 NaN”。"""
     b = dict(BASE, g_wm2=0.0)
     with tempfile.TemporaryDirectory() as tmp:
-        r, rows, _l, _c = run_tool(tmp, [("T-G0", b)])
+        r, rows, _l, _c, _f = run_tool(tmp, [("T-G0", b)])
         got = values(rows, "T-G0")
     assert r.returncode == 0 and got is not None
     assert all(math.isfinite(v) for v in got.values())
@@ -311,7 +337,7 @@ def test_zero_irradiance_no_nan():
 def test_report_header_and_columns():
     """题面原文：“表头与列序固定：batch_id,isc_a,voc_v,vmpp_v,impp_a,pmpp_w”。"""
     with tempfile.TemporaryDirectory() as tmp:
-        r, rows, _l, _c = run_tool(tmp, [("T-H1", dict(BASE)), ("T-H2", dict(BASE, t_amb_c=35.0))])
+        r, rows, _l, _c, _f = run_tool(tmp, [("T-H1", dict(BASE)), ("T-H2", dict(BASE, t_amb_c=35.0))])
     assert r.returncode == 0 and rows and rows[0] == HEADER
     body = [row for row in rows[1:] if row and row[1] != "ERROR"]
     assert [row[0] for row in body] == ["T-H1", "T-H2"]
@@ -325,7 +351,7 @@ def test_curve_full_grid_pointwise():
     b = dict(BASE, t_amb_c=30.0, g_wm2=850.0)
     iph, i0, nvt = bench_params(b)
     with tempfile.TemporaryDirectory() as tmp:
-        r, _rows, _l, cdir = run_tool(tmp, [("T-CV", b)])
+        r, _rows, _l, cdir, _f = run_tool(tmp, [("T-CV", b)])
         assert r.returncode == 0
         path = os.path.join(cdir, "T-CV.csv")
         assert os.path.exists(path)
@@ -343,7 +369,7 @@ def test_ledger_rerun_no_duplicate():
     """题面原文：“同一批次参数没变时重跑不得新增行”。"""
     with tempfile.TemporaryDirectory() as tmp:
         run_tool(tmp, [("T-L1", dict(BASE)), ("T-L2", dict(BASE, t_amb_c=30.0))])
-        _r, _rows, led, _c = run_tool(tmp, [("T-L1", dict(BASE)), ("T-L2", dict(BASE, t_amb_c=30.0))])
+        _r, _rows, led, _c, _f = run_tool(tmp, [("T-L1", dict(BASE)), ("T-L2", dict(BASE, t_amb_c=30.0))])
     ids = [json.loads(x)["batch_id"] for x in led if x.strip()]
     assert len(ids) == 2 and sorted(ids) == ["T-L1", "T-L2"]
 
@@ -351,10 +377,10 @@ def test_ledger_rerun_no_duplicate():
 def test_ledger_update_and_recover():
     """题面原文：“参数变了更新该批次的行；台账有损坏行时给出可读提示并重建，退出码 0，不抛 traceback”。"""
     with tempfile.TemporaryDirectory() as tmp:
-        _r, _rows, _l, _c = run_tool(tmp, [("T-U1", dict(BASE))])
+        _r, _rows, _l, _c, _f = run_tool(tmp, [("T-U1", dict(BASE))])
         led_path = os.path.join(tmp, "ledger.jsonl")
         changed = dict(BASE, t_amb_c=40.0)
-        r2, _rows2, led2, _c2 = run_tool(tmp, [("T-U1", changed)])
+        r2, _rows2, led2, _c2, _f2 = run_tool(tmp, [("T-U1", changed)])
         exp = expected_points(changed)
         assert r2.returncode == 0
         assert len([x for x in led2 if x.strip()]) == 1
@@ -375,3 +401,79 @@ def test_ledger_update_and_recover():
             lines = [x for x in f.read().splitlines() if x.strip()]
         ids = [json.loads(x)["batch_id"] for x in lines]
         assert ids == ["T-U1"]
+
+
+# ---------------------------------------------------------------- 反问题：参数辨识
+FIT_BATCH = dict(BASE, isc_stc_a=9.00, i0_stc_a=1.4e-7, n_factor=1.18, rs_ohm=0.32,
+                 rsh_ohm=420.0, t_amb_c=32.0, g_wm2=950.0)
+
+
+def _run_fit(tmp):
+    """跑一遍辨识，返回 (returncode, fitrows, 真值 dict, 标定点)。"""
+    b = FIT_BATCH
+    r, _rows, _l, _c, fitrows = run_tool(tmp, [("T-FIT", b)], meas_ids=["T-FIT"])
+    iph, i0_true, nvt = bench_params(b)
+    pts = []
+    import csv as _csv
+    with open(os.path.join(tmp, "meas", "T-FIT.csv"), newline="", encoding="utf-8") as f:
+        for row in _csv.DictReader(f):
+            pts.append((float(row["v"]), float(row["i"])))
+    truth = dict(i0=i0_true, n=b["n_factor"], rs=b["rs_ohm"], rsh=b["rsh_ohm"], iph=iph, nvt=nvt)
+    return r, fitrows.get("T-FIT"), truth, pts
+
+
+def test_fit_i0_log_domain_accurate():
+    """题面原文：“在该批次自己的工况下辨识四个参数：暗饱和电流 I0（A）、理想因子 n、串联电阻 Rs（Ω）、并联电阻 Rsh（Ω）”。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        r, got, truth, _pts = _run_fit(tmp)
+    assert r.returncode == 0 and got is not None
+    assert abs(math.log10(float(got["i0_a"]) / truth["i0"])) <= 0.05
+
+
+def test_fit_ideality_factor_accurate():
+    """题面原文：“理想因子 n”。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        r, got, truth, _pts = _run_fit(tmp)
+    assert r.returncode == 0 and got is not None
+    assert float(got["n_factor"]) == pytest.approx(truth["n"], rel=0.02)
+
+
+def test_fit_series_resistance_accurate():
+    """题面原文：“串联电阻 Rs（Ω）”。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        r, got, truth, _pts = _run_fit(tmp)
+    assert r.returncode == 0 and got is not None
+    assert float(got["rs_ohm"]) == pytest.approx(truth["rs"], rel=0.10)
+
+
+def test_fit_shunt_resistance_accurate():
+    """题面原文：“并联电阻 Rsh（Ω）”。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        r, got, truth, _pts = _run_fit(tmp)
+    assert r.returncode == 0 and got is not None
+    assert float(got["rsh_ohm"]) == pytest.approx(truth["rsh"], rel=0.30)
+
+
+def test_fit_rmse_small_enough():
+    """题面原文：“rmse_a 是用辨识出的参数回放曲线、与标定点电流的均方根误差（A）”。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        r, got, truth, _pts = _run_fit(tmp)
+    assert r.returncode == 0 and got is not None
+    isc_op = i_at_v(0.0, truth["iph"], truth["i0"], truth["rs"], truth["rsh"], truth["nvt"])
+    assert float(got["rmse_a"]) <= 0.005 * isc_op
+
+
+def test_fit_replay_matches_measurements():
+    """题面原文：“用辨识出的参数回放曲线、与标定点电流的均方根误差”。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        r, got, truth, pts = _run_fit(tmp)
+    assert r.returncode == 0 and got is not None
+    i0 = float(got["i0_a"])
+    n = float(got["n_factor"])
+    rs = float(got["rs_ohm"])
+    rsh = float(got["rsh_ohm"])
+    # 回放用辨识参数自带工况重算热电压
+    t_cell = FIT_BATCH["t_amb_c"] + (FIT_BATCH["noct_c"] - 20.0) * FIT_BATCH["g_wm2"] / 800.0
+    nvt = n * K_B * (t_cell + 273.15) / Q_E * FIT_BATCH["ns_cells"]
+    worst = max(abs(i_at_v(v, truth["iph"], i0, rs, rsh, nvt) - i) for v, i in pts)
+    assert worst <= 0.01 * truth["iph"]

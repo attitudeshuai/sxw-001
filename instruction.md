@@ -15,14 +15,22 @@
 工具在 `src/` 下，跑法：
 
 ```
-python3 src/iv_recheck.py --input data/batches.csv --report out/report.csv --curve-dir out/curve --ledger out/ledger.jsonl
+python3 src/iv_recheck.py --input data/batches.csv --report out/report.csv --curve-dir out/curve --ledger out/ledger.jsonl --measurements data/measurements --fit-out out/fit.csv
 ```
 
 最近几班反映：高温批次的开路电压总是偏高；低辐照批次短路电流对不上手持表；近开路区程序会振荡甚至溢出中断；同一批次重复跑会重复登记台账。
 
 ## 任务
 
-把复核工具改对，并让输出符合下面的合同。
+把复核工具改对，并让输出符合下面的合同。另外，有一批标定曲线要做参数辨识（见下）。
+
+## 参数辨识（反问题）
+
+`data/measurements/` 下有若干 `{batch_id}.csv` 标定曲线（每行 `v,i`，是运维平台按单二极管模型加固定生成规则产出的标定数据，覆盖 0 到 60 V）。这些批次的工况在 `data/batches.csv` 里查得到。对每个有标定曲线的批次，在该批次自己的工况下辨识四个参数：暗饱和电流 I0（A）、理想因子 n、串联电阻 Rs（Ω）、并联电阻 Rsh（Ω）。该工况下的光电流按折算口径先算出来，不是待辨识量。
+
+结果写到 `--fit-out` 指定的 CSV，表头与列序固定：`batch_id,i0_a,n_factor,rs_ohm,rsh_ohm,rmse_a`。rmse_a 是用辨识出的参数回放曲线、与标定点电流的均方根误差（A）。辨识值保留到足够精度（I0 用科学计数法，其余 4 位小数）。没有标定曲线的批次不出现在 fit 结果里。
+
+提醒：这四个参数的量级差得很远（I0 在 1e-7 量级，Rsh 到几百），直接在同一尺度上搜索是搜不动的。
 
 ## 输入
 
