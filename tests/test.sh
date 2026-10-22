@@ -2,7 +2,8 @@
 # 评分脚本：reward 只写 /logs/verifier/reward.txt；开头先覆盖为 0；
 # EXIT/INT/TERM/HUP 都兜底归零（只有正常跑到打分那一步才保留分数）；写完 chmod 0444。
 # 判分依赖结构化 pytest 完成报告（junitxml + score.py 的 scoring-report.json）；
-# pytest 没正常完成或完成报告不存在/不可解析时记 INCOMPLETE 并写 0。
+# pytest 退出码语义：0 全过、1 有测试失败（属正常完成，junit 里逐条有记录）、2 中断、5 没收集到测试。
+# 只有 2/5 或完成报告缺失/不可解析才算 INCOMPLETE；rc=1 必须照常走打分。
 set -u
 
 mkdir -p /logs/verifier
@@ -31,7 +32,7 @@ else
   python3 -c "import xml.etree.ElementTree as ET; ET.parse('$RESULTS')" 2>/dev/null || REPORT_OK=0
 fi
 
-if [ $PYTEST_RC -ne 0 ] || [ $REPORT_OK -eq 0 ]; then
+if [ $PYTEST_RC -ge 2 ] || [ $REPORT_OK -eq 0 ]; then
   echo "INCOMPLETE: pytest 未正常完成或完成报告不可用（rc=$PYTEST_RC, report_ok=$REPORT_OK）" >&2
   echo 0 > /logs/verifier/reward.txt
   touch /tmp/.harbor_scored
