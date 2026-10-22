@@ -6,8 +6,8 @@ import sys
 
 import iv_model
 
-VALUE_KEYS = ["isc_stc_a", "i0_a", "n_factor", "rs_ohm", "rsh_ohm",
-              "ns_cells", "alpha_rel", "t_cell_c", "g_wm2"]
+VALUE_KEYS = ["isc_stc_a", "i0_stc_a", "n_factor", "rs_ohm", "rsh_ohm",
+              "ns_cells", "alpha_rel", "eg_ev", "noct_c", "t_amb_c", "g_wm2"]
 
 
 def parse_row(row):
@@ -21,19 +21,40 @@ def parse_row(row):
     b["rsh"] = float(row[5])
     b["ns"] = int(row[6])
     b["alpha"] = float(row[7])
-    b["t_cell"] = float(row[8])
-    b["g"] = float(row[9])
+    b["eg"] = float(row[8])
+    b["noct"] = float(row[9])
+    b["t_amb"] = float(row[10])
+    b["g"] = float(row[11])
     return b
 
 
+def model_params(batch):
+    t_cell = iv_model.cell_temperature(batch["t_amb"], batch["noct"], batch["g"])
+    nvt = iv_model.thermal_voltage(batch["n"], t_cell, batch["ns"])
+    iph = iv_model.photocurrent(batch["isc_stc"], batch["alpha"], t_cell, batch["g"])
+    i0 = iv_model.saturation_current(batch["i0"], batch["eg"], batch["n"], t_cell)
+    return iph, i0, nvt
+
+
 def evaluate(batch):
-    nvt = iv_model.thermal_voltage(batch["n"], batch["t_cell"], batch["ns"])
-    iph = iv_model.photocurrent(batch["isc_stc"], batch["alpha"], batch["t_cell"], batch["g"])
-    isc = iv_model.short_circuit_current(iph, batch["i0"], batch["rs"], batch["rsh"], nvt)
-    voc = iv_model.open_circuit_voltage(iph, batch["i0"], batch["rs"], batch["rsh"], nvt)
-    vmpp, pmpp = iv_model.max_power_point(iph, batch["i0"], batch["rs"], batch["rsh"], nvt)
+    iph, i0, nvt = model_params(batch)
+    isc = iv_model.short_circuit_current(iph, i0, batch["rs"], batch["rsh"], nvt)
+    voc = iv_model.open_circuit_voltage(iph, i0, batch["rs"], batch["rsh"], nvt)
+    vmpp, pmpp = iv_model.max_power_point(iph, i0, batch["rs"], batch["rsh"], nvt)
     impp = pmpp / vmpp if vmpp > 0 else 0.0
     return isc, voc, vmpp, impp, pmpp
+
+
+def write_curve(curve_dir, batch):
+    iph, i0, nvt = model_params(batch)
+    path = os.path.join(curve_dir, "%s.csv" % batch["batch_id"])
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["v", "i"])
+        for k in range(121):
+            v = k * 0.5
+            i = iv_model.current_at_voltage(v, iph, i0, batch["rs"], batch["rsh"], nvt)
+            w.writerow(["%.1f" % v, "%.4f" % i])
 
 
 def load_ledger(path):
@@ -59,10 +80,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True)
     ap.add_argument("--report", required=True)
+    ap.add_argument("--curve-dir", required=True)
     ap.add_argument("--ledger", required=True)
     args = ap.parse_args()
 
     os.makedirs(os.path.dirname(os.path.abspath(args.report)), exist_ok=True)
+    os.makedirs(args.curve_dir, exist_ok=True)
     os.makedirs(os.path.dirname(os.path.abspath(args.ledger)), exist_ok=True)
 
     with open(args.input, newline="", encoding="utf-8") as f:
@@ -92,7 +115,15 @@ def main():
                 w.writerow([bid, "%.3f" % isc, "%.3f" % voc,
                             "%.3f" % vmpp, "%.3f" % impp, "%.3f" % pmpp])
 
-    # 台账按 batch_id  upsert：参数没变时内容不变、不会新增行；变了就更新该批次的行
+    for row in rows:
+        bid = row[0]
+        if results.get(bid) is not None:
+            try:
+                write_curve(args.curve_dir, parse_row(row))
+            except (ValueError, TypeError):
+                pass
+
+    # 台账按 batch_id upsert：参数没变内容不变、不新增行；变了更新该行
     ledger = load_ledger(args.ledger)
     for bid in order:
         res = results[bid]

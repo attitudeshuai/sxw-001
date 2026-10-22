@@ -4,16 +4,24 @@ import math
 
 K_B = 1.380649e-23
 Q_E = 1.602176634e-19
-T_REF = 298.15
+T_STC = 298.15
+
+
+def cell_temperature(t_amb_c, noct_c, g_wm2):
+    return t_amb_c + (noct_c - 20.0) * g_wm2 / 1000.0
 
 
 def thermal_voltage(n_factor, t_cell_c, ns_cells):
-    v_t = n_factor * K_B * T_REF / Q_E
+    v_t = n_factor * K_B * T_STC / Q_E
     return v_t * ns_cells
 
 
 def photocurrent(isc_stc, alpha_rel, t_cell_c, g_wm2):
     return isc_stc * (1.0 + alpha_rel * t_cell_c) * g_wm2 / 1000.0
+
+
+def saturation_current(i0_stc, eg_ev, n_factor, t_cell_c):
+    return i0_stc
 
 
 def current_at_voltage(v, iph, i0, rs, rsh, nvt):
