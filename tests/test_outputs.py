@@ -306,7 +306,7 @@ def test_huge_shunt_resistance_stable():
 
 
 def test_illegal_row_marked_error():
-    """题面原文：“非法行（列数不对、数值无法解析）在报告里标 batch_id,ERROR，其余批次照常出数”。"""
+    """题面原文：“非法行（列数不对、数值无法解析）在报告里标”，退出码 0 依据“其余批次照常出数，退出码 0”。"""
     good = dict(BASE)
     with tempfile.TemporaryDirectory() as tmp:
         r, rows, led, cdir, _f = run_tool(tmp, [("T-OK", good), ("T-BAD", "not-a-number")])
@@ -335,19 +335,19 @@ def test_zero_irradiance_no_nan():
 
 
 def test_report_header_and_columns():
-    """题面原文：“表头与列序固定：batch_id,isc_a,voc_v,vmpp_v,impp_a,pmpp_w”。"""
+    """题面原文：“表头与列序固定”，列名为 batch_id,isc_a 等六个。"""
     with tempfile.TemporaryDirectory() as tmp:
         r, rows, _l, _c, _f = run_tool(tmp, [("T-H1", dict(BASE)), ("T-H2", dict(BASE, t_amb_c=35.0))])
     assert r.returncode == 0 and rows and rows[0] == HEADER
     body = [row for row in rows[1:] if row and row[1] != "ERROR"]
     assert [row[0] for row in body] == ["T-H1", "T-H2"]
-    for row in body:
-        for c in row[1:6]:
-            assert re.match(r"^-?\d+\.\d{3}$", c), "数值必须 3 位小数：%r" % c
+    bad_cells = [c for row in body for c in row[1:6]
+                 if not re.match(r"^-?\d+\.\d{3}$", c)]
+    assert not bad_cells, "数值必须 3 位小数：%r" % bad_cells[:3]
 
 
 def test_curve_full_grid_pointwise():
-    """题面原文：“电压固定取 0 到 60 V、每 0.5 V 一个点（共 121 点），每行 v,i，电流保留 4 位小数”。"""
+    """题面原文：“电压固定取 0 到 60 V、每 0.5 V 一个点（共 121 点）”。"""
     b = dict(BASE, t_amb_c=30.0, g_wm2=850.0)
     iph, i0, nvt = bench_params(b)
     with tempfile.TemporaryDirectory() as tmp:
